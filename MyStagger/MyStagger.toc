@@ -1,0 +1,7 @@
+## Interface: 120005
+## Title: MyStagger
+## Notes: Displays Brewmaster Monk stagger as a percentage of maximum health and per‑second value.
+## Author: Bubumonster
+## Version: 0.420
+
+MyStagger.lua
