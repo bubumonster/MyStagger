@@ -6,7 +6,7 @@ local UPDATE_INTERVAL = 0.15
 
 local active = false
 local elapsed = 0
-local STAGGER_DURATION = 10
+local staggerDuration = 10
 
 local wasAboveThreshold = false
 local lastSoundTime = 0
@@ -62,17 +62,17 @@ local function InitDB()
     db = MyStaggerData
 end
 
-local f = CreateFrame("Frame", ADDON_NAME .. "Frame", UIParent)
-f:SetSize(260, 32)
-f:SetMovable(true)
-f:EnableMouse(true)
-f:RegisterForDrag("LeftButton")
-f:Hide()
+local frame = CreateFrame("Frame", ADDON_NAME .. "Frame", UIParent)
+frame:SetSize(260, 32)
+frame:SetMovable(true)
+frame:EnableMouse(true)
+frame:RegisterForDrag("LeftButton")
+frame:Hide()
 
-local text = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-text:SetAllPoints()
-text:SetJustifyH("CENTER")
-text:SetJustifyV("MIDDLE")
+local displayText = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+displayText:SetAllPoints()
+displayText:SetJustifyH("CENTER")
+displayText:SetJustifyV("MIDDLE")
 
 local function ResetStyleCache()
     currentStyle = nil
@@ -80,6 +80,11 @@ end
 
 local function ResetTextCache()
     lastDisplayedValue = nil
+end
+
+local function ResetAlertState()
+    wasAboveThreshold = false
+    lastSoundTime = 0
 end
 
 local function SetTextStyle(perSecondPercent)
@@ -100,14 +105,14 @@ local function SetTextStyle(perSecondPercent)
     currentStyle = newStyle
 
     if newStyle == "alert" then
-        text:SetFont(STANDARD_TEXT_FONT, db.alertFontSize, "OUTLINE")
-        text:SetTextColor(1.0, 0.15, 0.15)
+        displayText:SetFont(STANDARD_TEXT_FONT, db.alertFontSize, "OUTLINE")
+        displayText:SetTextColor(1.0, 0.15, 0.15)
     elseif newStyle == "warning" then
-        text:SetFont(STANDARD_TEXT_FONT, db.fontSize, "OUTLINE")
-        text:SetTextColor(1.0, 0.55, 0.10)
+        displayText:SetFont(STANDARD_TEXT_FONT, db.fontSize, "OUTLINE")
+        displayText:SetTextColor(1.0, 0.55, 0.10)
     else
-        text:SetFont(STANDARD_TEXT_FONT, db.fontSize, "OUTLINE")
-        text:SetTextColor(1.0, 1.0, 1.0)
+        displayText:SetFont(STANDARD_TEXT_FONT, db.fontSize, "OUTLINE")
+        displayText:SetTextColor(1.0, 1.0, 1.0)
     end
 end
 
@@ -119,18 +124,18 @@ local function SetDisplayText(perSecondPercent)
     end
 
     lastDisplayedValue = rounded
-    text:SetText(string.format("%.2f%%/s", rounded))
+    displayText:SetText(string.format("%.2f%%/s", rounded))
 end
 
 local function ShowDisplay()
-    if not f:IsShown() then
-        f:Show()
+    if not frame:IsShown() then
+        frame:Show()
     end
 end
 
 local function HideDisplay()
-    if f:IsShown() then
-        f:Hide()
+    if frame:IsShown() then
+        frame:Hide()
     end
 
     wasAboveThreshold = false
@@ -138,8 +143,8 @@ local function HideDisplay()
 end
 
 local function ApplySettings()
-    f:ClearAllPoints()
-    f:SetPoint("CENTER", UIParent, "CENTER", db.x, db.y)
+    frame:ClearAllPoints()
+    frame:SetPoint("CENTER", UIParent, "CENTER", db.x, db.y)
 
     ResetStyleCache()
     ResetTextCache()
@@ -170,30 +175,6 @@ local function PlayAlertSound()
     end
 end
 
-local function ResetAlertState()
-    wasAboveThreshold = false
-    lastSoundTime = 0
-end
-
-f:SetScript("OnDragStart", function(self)
-    self:StartMoving()
-end)
-
-f:SetScript("OnDragStop", function(self)
-    self:StopMovingOrSizing()
-
-    local centerX = self:GetLeft() + self:GetWidth() / 2
-    local centerY = self:GetBottom() + self:GetHeight() / 2
-
-    local uiCenterX = UIParent:GetWidth() / 2
-    local uiCenterY = UIParent:GetHeight() / 2
-
-    db.x = math.floor(centerX - uiCenterX + 0.5)
-    db.y = math.floor(centerY - uiCenterY + 0.5)
-
-    ApplySettings()
-end)
-
 local function IsBrewmaster()
     local _, class = UnitClass("player")
     return class == "MONK" and GetSpecialization() == BREWMASTER_SPEC_INDEX
@@ -208,7 +189,7 @@ local function HasBobAndWeave()
 end
 
 local function UpdateTalentState()
-    STAGGER_DURATION = HasBobAndWeave() and 15 or 10
+    staggerDuration = HasBobAndWeave() and 15 or 10
 end
 
 local function ShowValue(perSecondPercent)
@@ -253,7 +234,7 @@ local function Update()
     end
 
     local totalPercent = stagger / maxHP * 100
-    local perSecondPercent = totalPercent / STAGGER_DURATION
+    local perSecondPercent = totalPercent / staggerDuration
 
     ShowValue(perSecondPercent)
 end
@@ -278,7 +259,7 @@ local function EnableBrewmasterMode()
     ResetAlertState()
     ResetTextCache()
 
-    f:SetScript("OnUpdate", OnUpdate)
+    frame:SetScript("OnUpdate", OnUpdate)
 
     UpdateTalentState()
     Update()
@@ -295,7 +276,7 @@ local function DisableBrewmasterMode()
     ResetAlertState()
     ResetTextCache()
 
-    f:SetScript("OnUpdate", nil)
+    frame:SetScript("OnUpdate", nil)
 
     if not testDisplayActive then
         HideDisplay()
@@ -310,12 +291,91 @@ local function RefreshBrewmasterState()
     end
 end
 
-local options = CreateFrame("Frame")
-options.name = "MyStagger"
+local function SetFontSize(value)
+    db.fontSize = value
+    ResetStyleCache()
+    ResetTextCache()
+    Update()
+end
 
-local title = options:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
-title:SetPoint("TOPLEFT", 16, -16)
-title:SetText("MyStagger")
+local function SetAlertFontSize(value)
+    db.alertFontSize = value
+    ResetStyleCache()
+    ResetTextCache()
+    Update()
+end
+
+local function SetPosition(x, y)
+    db.x = x
+    db.y = y
+
+    ApplySettings()
+    Update()
+end
+
+local function SetXPosition(value)
+    SetPosition(value, db.y)
+end
+
+local function SetYPosition(value)
+    SetPosition(db.x, value)
+end
+
+local function SetAlertThreshold(value)
+    db.alertThreshold = value
+
+    ResetAlertState()
+    ResetStyleCache()
+    ResetTextCache()
+    Update()
+end
+
+local function SetSoundEnabled(value)
+    db.soundEnabled = value
+    ResetAlertState()
+end
+
+local function ToggleSoundMode()
+    if db.soundMode == "soundkit" then
+        db.soundMode = "custom"
+    else
+        db.soundMode = "soundkit"
+    end
+
+    ResetAlertState()
+end
+
+local function ToggleTestDisplay()
+    testDisplayActive = not testDisplayActive
+
+    ResetAlertState()
+    ResetTextCache()
+    Update()
+end
+
+local function ResetPosition()
+    SetPosition(defaults.x, defaults.y)
+end
+
+-- Dragging
+frame:SetScript("OnDragStart", function(self)
+    self:StartMoving()
+end)
+
+frame:SetScript("OnDragStop", function(self)
+    self:StopMovingOrSizing()
+
+    local centerX = self:GetLeft() + self:GetWidth() / 2
+    local centerY = self:GetBottom() + self:GetHeight() / 2
+
+    local uiCenterX = UIParent:GetWidth() / 2
+    local uiCenterY = UIParent:GetHeight() / 2
+
+    SetPosition(
+        math.floor(centerX - uiCenterX + 0.5),
+        math.floor(centerY - uiCenterY + 0.5)
+    )
+end)
 
 local function MakeNumericEditBox(parent, labelText, x, y, width, minValue, maxValue, getValue, setValue)
     local label = parent:CreateFontString(nil, "ARTWORK", "GameFontNormal")
@@ -367,205 +427,182 @@ local function MakeNumericEditBox(parent, labelText, x, y, width, minValue, maxV
     return editBox
 end
 
-local sizeEdit = MakeNumericEditBox(
-    options,
-    "Normal Font Size",
-    16,
-    -64,
-    80,
-    10,
-    36,
-    function()
-        return db.fontSize
-    end,
-    function(value)
-        db.fontSize = value
-        ResetStyleCache()
-        ResetTextCache()
-        Update()
+local function CreateOptionsPanel()
+    local options = CreateFrame("Frame")
+    options.name = "MyStagger"
+
+    local title = options:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
+    title:SetPoint("TOPLEFT", 16, -16)
+    title:SetText("MyStagger")
+
+    local sizeEdit = MakeNumericEditBox(
+        options,
+        "Normal Font Size",
+        16,
+        -64,
+        80,
+        10,
+        36,
+        function()
+            return db.fontSize
+        end,
+        SetFontSize
+    )
+
+    local alertSizeEdit = MakeNumericEditBox(
+        options,
+        "Alert Font Size",
+        140,
+        -64,
+        80,
+        10,
+        48,
+        function()
+            return db.alertFontSize
+        end,
+        SetAlertFontSize
+    )
+
+    local xEdit = MakeNumericEditBox(
+        options,
+        "X Position",
+        16,
+        -130,
+        80,
+        -2000,
+        2000,
+        function()
+            return db.x
+        end,
+        SetXPosition
+    )
+
+    local yEdit = MakeNumericEditBox(
+        options,
+        "Y Position",
+        140,
+        -130,
+        80,
+        -2000,
+        2000,
+        function()
+            return db.y
+        end,
+        SetYPosition
+    )
+
+    local thresholdLabel = options:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+    thresholdLabel:SetPoint("TOPLEFT", 16, -200)
+    thresholdLabel:SetText("Alert Threshold: HP% per second")
+
+    local thresholdSlider = CreateFrame("Slider", nil, options, "OptionsSliderTemplate")
+    thresholdSlider:SetPoint("TOPLEFT", thresholdLabel, "BOTTOMLEFT", 0, -12)
+    thresholdSlider:SetMinMaxValues(0.5, 20)
+    thresholdSlider:SetValueStep(0.1)
+    thresholdSlider:SetObeyStepOnDrag(true)
+    thresholdSlider:SetWidth(220)
+    thresholdSlider.Low:SetText("0.5")
+    thresholdSlider.High:SetText("20")
+    thresholdSlider.Text:SetText("")
+
+    thresholdSlider:SetScript("OnValueChanged", function(_, value)
+        local rounded = math.floor(value * 10 + 0.5) / 10
+
+        SetAlertThreshold(rounded)
+        thresholdSlider.Text:SetText(string.format("%.1f%%/s", db.alertThreshold))
+    end)
+
+    local soundBtn = CreateFrame("Button", nil, options, "UIPanelButtonTemplate")
+    soundBtn:SetSize(140, 24)
+    soundBtn:SetPoint("TOPLEFT", thresholdSlider, "BOTTOMLEFT", 0, -32)
+
+    local soundTestBtn = CreateFrame("Button", nil, options, "UIPanelButtonTemplate")
+    soundTestBtn:SetSize(120, 24)
+    soundTestBtn:SetPoint("LEFT", soundBtn, "RIGHT", 12, 0)
+    soundTestBtn:SetText("Test Sound")
+
+    local soundModeBtn = CreateFrame("Button", nil, options, "UIPanelButtonTemplate")
+    soundModeBtn:SetSize(180, 24)
+    soundModeBtn:SetPoint("TOPLEFT", soundBtn, "BOTTOMLEFT", 0, -12)
+
+    local testBtn = CreateFrame("Button", nil, options, "UIPanelButtonTemplate")
+    testBtn:SetSize(140, 24)
+    testBtn:SetPoint("TOPLEFT", soundModeBtn, "BOTTOMLEFT", 0, -16)
+
+    local resetBtn = CreateFrame("Button", nil, options, "UIPanelButtonTemplate")
+    resetBtn:SetSize(140, 24)
+    resetBtn:SetPoint("LEFT", testBtn, "RIGHT", 12, 0)
+    resetBtn:SetText("Reset Position")
+
+    local helpText = options:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+    helpText:SetPoint("TOPLEFT", testBtn, "BOTTOMLEFT", 0, -24)
+    helpText:SetText("<50% threshold = white, 50-100% = orange, above threshold = red")
+
+    local function UpdateSoundButtonText()
+        soundBtn:SetText(db.soundEnabled and "Sound: On" or "Sound: Off")
     end
-)
 
-local alertSizeEdit = MakeNumericEditBox(
-    options,
-    "Alert Font Size",
-    140,
-    -64,
-    80,
-    10,
-    48,
-    function()
-        return db.alertFontSize
-    end,
-    function(value)
-        db.alertFontSize = value
-        ResetStyleCache()
-        ResetTextCache()
-        Update()
+    local function UpdateSoundModeButtonText()
+        if db.soundMode == "soundkit" then
+            soundModeBtn:SetText("Sound Type: Raid Warning")
+        else
+            soundModeBtn:SetText("Sound Type: Custom")
+        end
     end
-)
 
-local xEdit = MakeNumericEditBox(
-    options,
-    "X Position",
-    16,
-    -130,
-    80,
-    -2000,
-    2000,
-    function()
-        return db.x
-    end,
-    function(value)
-        db.x = value
-        ApplySettings()
-        Update()
+    local function UpdateTestButtonText()
+        testBtn:SetText(testDisplayActive and "Test: On" or "Test: Off")
     end
-)
 
-local yEdit = MakeNumericEditBox(
-    options,
-    "Y Position",
-    140,
-    -130,
-    80,
-    -2000,
-    2000,
-    function()
-        return db.y
-    end,
-    function(value)
-        db.y = value
-        ApplySettings()
-        Update()
-    end
-)
+    soundBtn:SetScript("OnClick", function()
+        SetSoundEnabled(not db.soundEnabled)
+        UpdateSoundButtonText()
+    end)
 
-local thresholdLabel = options:CreateFontString(nil, "ARTWORK", "GameFontNormal")
-thresholdLabel:SetPoint("TOPLEFT", 16, -200)
-thresholdLabel:SetText("Alert Threshold: HP% per second")
+    soundTestBtn:SetScript("OnClick", function()
+        lastSoundTime = 0
+        PlayAlertSound()
+    end)
 
-local thresholdSlider = CreateFrame("Slider", nil, options, "OptionsSliderTemplate")
-thresholdSlider:SetPoint("TOPLEFT", thresholdLabel, "BOTTOMLEFT", 0, -12)
-thresholdSlider:SetMinMaxValues(0.5, 20)
-thresholdSlider:SetValueStep(0.1)
-thresholdSlider:SetObeyStepOnDrag(true)
-thresholdSlider:SetWidth(220)
-thresholdSlider.Low:SetText("0.5")
-thresholdSlider.High:SetText("20")
-thresholdSlider.Text:SetText("")
+    soundModeBtn:SetScript("OnClick", function()
+        ToggleSoundMode()
+        UpdateSoundModeButtonText()
+    end)
 
-thresholdSlider:SetScript("OnValueChanged", function(_, value)
-    db.alertThreshold = math.floor(value * 10 + 0.5) / 10
-    thresholdSlider.Text:SetText(string.format("%.1f%%/s", db.alertThreshold))
+    testBtn:SetScript("OnClick", function()
+        ToggleTestDisplay()
+        UpdateTestButtonText()
+    end)
 
-    ResetAlertState()
-    ResetStyleCache()
-    ResetTextCache()
-    Update()
-end)
+    resetBtn:SetScript("OnClick", function()
+        ResetPosition()
 
-local soundBtn = CreateFrame("Button", nil, options, "UIPanelButtonTemplate")
-soundBtn:SetSize(140, 24)
-soundBtn:SetPoint("TOPLEFT", thresholdSlider, "BOTTOMLEFT", 0, -32)
+        xEdit.Refresh()
+        yEdit.Refresh()
+    end)
 
-local function UpdateSoundButtonText()
-    soundBtn:SetText(db.soundEnabled and "Sound: On" or "Sound: Off")
+    options:SetScript("OnShow", function()
+        if not db then
+            return
+        end
+
+        sizeEdit.Refresh()
+        alertSizeEdit.Refresh()
+        xEdit.Refresh()
+        yEdit.Refresh()
+
+        thresholdSlider:SetValue(db.alertThreshold)
+        thresholdSlider.Text:SetText(string.format("%.1f%%/s", db.alertThreshold))
+
+        UpdateSoundButtonText()
+        UpdateSoundModeButtonText()
+        UpdateTestButtonText()
+    end)
+
+    return options
 end
 
-soundBtn:SetScript("OnClick", function()
-    db.soundEnabled = not db.soundEnabled
-    ResetAlertState()
-    UpdateSoundButtonText()
-end)
-
-local soundTestBtn = CreateFrame("Button", nil, options, "UIPanelButtonTemplate")
-soundTestBtn:SetSize(120, 24)
-soundTestBtn:SetPoint("LEFT", soundBtn, "RIGHT", 12, 0)
-soundTestBtn:SetText("Test Sound")
-
-soundTestBtn:SetScript("OnClick", function()
-    lastSoundTime = 0
-    PlayAlertSound()
-end)
-
-local soundModeBtn = CreateFrame("Button", nil, options, "UIPanelButtonTemplate")
-soundModeBtn:SetSize(180, 24)
-soundModeBtn:SetPoint("TOPLEFT", soundBtn, "BOTTOMLEFT", 0, -12)
-
-local function UpdateSoundModeButtonText()
-    if db.soundMode == "soundkit" then
-        soundModeBtn:SetText("Sound Type: Raid Warning")
-    else
-        soundModeBtn:SetText("Sound Type: Custom")
-    end
-end
-
-soundModeBtn:SetScript("OnClick", function()
-    if db.soundMode == "soundkit" then
-        db.soundMode = "custom"
-    else
-        db.soundMode = "soundkit"
-    end
-
-    ResetAlertState()
-    UpdateSoundModeButtonText()
-end)
-
-local testBtn = CreateFrame("Button", nil, options, "UIPanelButtonTemplate")
-testBtn:SetSize(140, 24)
-testBtn:SetPoint("TOPLEFT", soundModeBtn, "BOTTOMLEFT", 0, -16)
-
-local function UpdateTestButtonText()
-    testBtn:SetText(testDisplayActive and "Test: On" or "Test: Off")
-end
-
-testBtn:SetScript("OnClick", function()
-    testDisplayActive = not testDisplayActive
-
-    ResetAlertState()
-    ResetTextCache()
-    UpdateTestButtonText()
-    Update()
-end)
-
-local resetBtn = CreateFrame("Button", nil, options, "UIPanelButtonTemplate")
-resetBtn:SetSize(140, 24)
-resetBtn:SetPoint("LEFT", testBtn, "RIGHT", 12, 0)
-resetBtn:SetText("Reset Position")
-
-resetBtn:SetScript("OnClick", function()
-    db.x = defaults.x
-    db.y = defaults.y
-
-    xEdit.Refresh()
-    yEdit.Refresh()
-
-    ApplySettings()
-    Update()
-end)
-
-local helpText = options:CreateFontString(nil, "ARTWORK", "GameFontNormal")
-helpText:SetPoint("TOPLEFT", testBtn, "BOTTOMLEFT", 0, -24)
-helpText:SetText("<50% threshold = white, 50-100% = orange, above threshold = red")
-
-options:SetScript("OnShow", function()
-    if not db then
-        return
-    end
-
-    sizeEdit.Refresh()
-    alertSizeEdit.Refresh()
-    xEdit.Refresh()
-    yEdit.Refresh()
-
-    thresholdSlider:SetValue(db.alertThreshold)
-    thresholdSlider.Text:SetText(string.format("%.1f%%/s", db.alertThreshold))
-
-    UpdateSoundButtonText()
-    UpdateSoundModeButtonText()
-    UpdateTestButtonText()
-end)
+local options = CreateOptionsPanel()
 
 if Settings and Settings.RegisterCanvasLayoutCategory then
     local category = Settings.RegisterCanvasLayoutCategory(options, options.name)
@@ -584,13 +621,8 @@ SlashCmdList.MYSTAGGER = function(msg)
     msg = msg and msg:lower() or ""
 
     if msg == "test" then
-        testDisplayActive = not testDisplayActive
-
-        ResetAlertState()
-        ResetTextCache()
-
+        ToggleTestDisplay()
         print("MyStagger test display: " .. (testDisplayActive and "on" or "off"))
-        Update()
         return
     end
 
@@ -601,11 +633,7 @@ SlashCmdList.MYSTAGGER = function(msg)
     end
 
     if msg == "reset" then
-        db.x = defaults.x
-        db.y = defaults.y
-
-        ApplySettings()
-        Update()
+        ResetPosition()
         return
     end
 
@@ -617,7 +645,7 @@ SlashCmdList.MYSTAGGER = function(msg)
     end
 end
 
-f:SetScript("OnEvent", function(_, event, arg1)
+frame:SetScript("OnEvent", function(_, event, arg1)
     if event == "ADDON_LOADED" then
         if arg1 ~= ADDON_NAME then
             return
@@ -626,7 +654,7 @@ f:SetScript("OnEvent", function(_, event, arg1)
         InitDB()
         ApplySettings()
 
-        f:UnregisterEvent("ADDON_LOADED")
+        frame:UnregisterEvent("ADDON_LOADED")
         return
     end
 
@@ -653,8 +681,8 @@ f:SetScript("OnEvent", function(_, event, arg1)
     end
 end)
 
-f:RegisterEvent("ADDON_LOADED")
-f:RegisterEvent("PLAYER_ENTERING_WORLD")
-f:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
-f:RegisterEvent("PLAYER_TALENT_UPDATE")
-f:RegisterEvent("TRAIT_CONFIG_UPDATED")
+frame:RegisterEvent("ADDON_LOADED")
+frame:RegisterEvent("PLAYER_ENTERING_WORLD")
+frame:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
+frame:RegisterEvent("PLAYER_TALENT_UPDATE")
+frame:RegisterEvent("TRAIT_CONFIG_UPDATED")
