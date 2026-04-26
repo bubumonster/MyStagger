@@ -12,7 +12,8 @@ local wasAboveThreshold = false
 local lastSoundTime = 0
 local testDisplayActive = false
 
-MyStaggerData = MyStaggerData or {}
+local currentStyle = nil
+local lastDisplayedValue = nil
 
 local defaults = {
     dbVersion = 2,
@@ -34,14 +35,18 @@ local defaults = {
     customSoundFile = "Interface\\AddOns\\MyStagger\\Media\\Pling1.ogg",
 }
 
-local function DB()
+local db
+
+local function InitDB()
+    MyStaggerData = MyStaggerData or {}
+
     for k, v in pairs(defaults) do
         if MyStaggerData[k] == nil then
             MyStaggerData[k] = v
         end
     end
 
-    if MyStaggerData.dbVersion < 2 then
+    if (MyStaggerData.dbVersion or 0) < 2 then
         if type(MyStaggerData.soundFile) == "string" then
             MyStaggerData.soundMode = "custom"
             MyStaggerData.customSoundFile = MyStaggerData.soundFile
@@ -54,7 +59,7 @@ local function DB()
         MyStaggerData.dbVersion = 2
     end
 
-    return MyStaggerData
+    db = MyStaggerData
 end
 
 local f = CreateFrame("Frame", ADDON_NAME .. "Frame", UIParent)
@@ -69,13 +74,35 @@ text:SetAllPoints()
 text:SetJustifyH("CENTER")
 text:SetJustifyV("MIDDLE")
 
+local function ResetStyleCache()
+    currentStyle = nil
+end
+
+local function ResetTextCache()
+    lastDisplayedValue = nil
+end
+
 local function SetTextStyle(perSecondPercent)
-    local db = DB()
+    local newStyle
 
     if perSecondPercent >= db.alertThreshold then
+        newStyle = "alert"
+    elseif perSecondPercent >= db.alertThreshold * 0.5 then
+        newStyle = "warning"
+    else
+        newStyle = "normal"
+    end
+
+    if newStyle == currentStyle then
+        return
+    end
+
+    currentStyle = newStyle
+
+    if newStyle == "alert" then
         text:SetFont(STANDARD_TEXT_FONT, db.alertFontSize, "OUTLINE")
         text:SetTextColor(1.0, 0.15, 0.15)
-    elseif perSecondPercent >= db.alertThreshold * 0.5 then
+    elseif newStyle == "warning" then
         text:SetFont(STANDARD_TEXT_FONT, db.fontSize, "OUTLINE")
         text:SetTextColor(1.0, 0.55, 0.10)
     else
@@ -84,18 +111,42 @@ local function SetTextStyle(perSecondPercent)
     end
 end
 
-local function ApplySettings()
-    local db = DB()
+local function SetDisplayText(perSecondPercent)
+    local rounded = math.floor(perSecondPercent * 100 + 0.5) / 100
 
+    if rounded == lastDisplayedValue then
+        return
+    end
+
+    lastDisplayedValue = rounded
+    text:SetText(string.format("%.2f%%/s", rounded))
+end
+
+local function ShowDisplay()
+    if not f:IsShown() then
+        f:Show()
+    end
+end
+
+local function HideDisplay()
+    if f:IsShown() then
+        f:Hide()
+    end
+
+    wasAboveThreshold = false
+    ResetTextCache()
+end
+
+local function ApplySettings()
     f:ClearAllPoints()
     f:SetPoint("CENTER", UIParent, "CENTER", db.x, db.y)
 
+    ResetStyleCache()
+    ResetTextCache()
     SetTextStyle(0)
 end
 
 local function PlayAlertSound()
-    local db = DB()
-
     if not db.soundEnabled then
         return
     end
@@ -119,14 +170,17 @@ local function PlayAlertSound()
     end
 end
 
+local function ResetAlertState()
+    wasAboveThreshold = false
+    lastSoundTime = 0
+end
+
 f:SetScript("OnDragStart", function(self)
     self:StartMoving()
 end)
 
 f:SetScript("OnDragStop", function(self)
     self:StopMovingOrSizing()
-
-    local db = DB()
 
     local centerX = self:GetLeft() + self:GetWidth() / 2
     local centerY = self:GetBottom() + self:GetHeight() / 2
@@ -158,30 +212,35 @@ local function UpdateTalentState()
 end
 
 local function ShowValue(perSecondPercent)
-    local db = DB()
     local isAboveThreshold = perSecondPercent >= db.alertThreshold
 
     SetTextStyle(perSecondPercent)
+    SetDisplayText(perSecondPercent)
 
     if isAboveThreshold and not wasAboveThreshold then
         PlayAlertSound()
     end
 
     wasAboveThreshold = isAboveThreshold
+    ShowDisplay()
+end
 
-    text:SetText(string.format("%.2f%%/s", perSecondPercent))
-    f:Show()
+local function ShowTestValue()
+    ShowValue(db.alertThreshold + 0.25)
 end
 
 local function Update()
+    if not db then
+        return
+    end
+
     if testDisplayActive then
-        local db = DB()
-        ShowValue(db.alertThreshold + 0.25)
+        ShowTestValue()
         return
     end
 
     if not active then
-        f:Hide()
+        HideDisplay()
         return
     end
 
@@ -189,8 +248,7 @@ local function Update()
     local maxHP = UnitHealthMax("player") or 0
 
     if stagger <= 0 or maxHP <= 0 then
-        f:Hide()
-        wasAboveThreshold = false
+        HideDisplay()
         return
     end
 
@@ -204,7 +262,7 @@ local function OnUpdate(_, delta)
     elapsed = elapsed + delta
 
     if elapsed >= UPDATE_INTERVAL then
-        elapsed = 0
+        elapsed = elapsed - UPDATE_INTERVAL
         Update()
     end
 end
@@ -216,10 +274,10 @@ local function EnableBrewmasterMode()
 
     active = true
     elapsed = 0
-    wasAboveThreshold = false
 
-    f:RegisterEvent("UNIT_HEALTH")
-    f:RegisterEvent("UNIT_MAXHEALTH")
+    ResetAlertState()
+    ResetTextCache()
+
     f:SetScript("OnUpdate", OnUpdate)
 
     UpdateTalentState()
@@ -233,14 +291,14 @@ local function DisableBrewmasterMode()
 
     active = false
     elapsed = 0
-    wasAboveThreshold = false
 
-    f:UnregisterEvent("UNIT_HEALTH")
-    f:UnregisterEvent("UNIT_MAXHEALTH")
+    ResetAlertState()
+    ResetTextCache()
+
     f:SetScript("OnUpdate", nil)
 
     if not testDisplayActive then
-        f:Hide()
+        HideDisplay()
     end
 end
 
@@ -268,7 +326,6 @@ local function MakeNumericEditBox(parent, labelText, x, y, width, minValue, maxV
     editBox:SetSize(width, 24)
     editBox:SetPoint("TOPLEFT", label, "BOTTOMLEFT", 0, -6)
     editBox:SetAutoFocus(false)
-
     editBox:SetNumeric(false)
 
     local function Commit()
@@ -297,6 +354,7 @@ local function MakeNumericEditBox(parent, labelText, x, y, width, minValue, maxV
 
     editBox:SetScript("OnEnterPressed", Commit)
     editBox:SetScript("OnEditFocusLost", Commit)
+
     editBox:SetScript("OnEscapePressed", function(self)
         self:SetText(tostring(getValue()))
         self:ClearFocus()
@@ -318,10 +376,12 @@ local sizeEdit = MakeNumericEditBox(
     10,
     36,
     function()
-        return DB().fontSize
+        return db.fontSize
     end,
     function(value)
-        DB().fontSize = value
+        db.fontSize = value
+        ResetStyleCache()
+        ResetTextCache()
         Update()
     end
 )
@@ -335,10 +395,12 @@ local alertSizeEdit = MakeNumericEditBox(
     10,
     48,
     function()
-        return DB().alertFontSize
+        return db.alertFontSize
     end,
     function(value)
-        DB().alertFontSize = value
+        db.alertFontSize = value
+        ResetStyleCache()
+        ResetTextCache()
         Update()
     end
 )
@@ -352,10 +414,10 @@ local xEdit = MakeNumericEditBox(
     -2000,
     2000,
     function()
-        return DB().x
+        return db.x
     end,
     function(value)
-        DB().x = value
+        db.x = value
         ApplySettings()
         Update()
     end
@@ -370,10 +432,10 @@ local yEdit = MakeNumericEditBox(
     -2000,
     2000,
     function()
-        return DB().y
+        return db.y
     end,
     function(value)
-        DB().y = value
+        db.y = value
         ApplySettings()
         Update()
     end
@@ -394,10 +456,12 @@ thresholdSlider.High:SetText("20")
 thresholdSlider.Text:SetText("")
 
 thresholdSlider:SetScript("OnValueChanged", function(_, value)
-    local db = DB()
     db.alertThreshold = math.floor(value * 10 + 0.5) / 10
     thresholdSlider.Text:SetText(string.format("%.1f%%/s", db.alertThreshold))
-    wasAboveThreshold = false
+
+    ResetAlertState()
+    ResetStyleCache()
+    ResetTextCache()
     Update()
 end)
 
@@ -406,15 +470,12 @@ soundBtn:SetSize(140, 24)
 soundBtn:SetPoint("TOPLEFT", thresholdSlider, "BOTTOMLEFT", 0, -32)
 
 local function UpdateSoundButtonText()
-    local db = DB()
     soundBtn:SetText(db.soundEnabled and "Sound: On" or "Sound: Off")
 end
 
 soundBtn:SetScript("OnClick", function()
-    local db = DB()
     db.soundEnabled = not db.soundEnabled
-    wasAboveThreshold = false
-    lastSoundTime = 0
+    ResetAlertState()
     UpdateSoundButtonText()
 end)
 
@@ -433,8 +494,6 @@ soundModeBtn:SetSize(180, 24)
 soundModeBtn:SetPoint("TOPLEFT", soundBtn, "BOTTOMLEFT", 0, -12)
 
 local function UpdateSoundModeButtonText()
-    local db = DB()
-
     if db.soundMode == "soundkit" then
         soundModeBtn:SetText("Sound Type: Raid Warning")
     else
@@ -443,17 +502,13 @@ local function UpdateSoundModeButtonText()
 end
 
 soundModeBtn:SetScript("OnClick", function()
-    local db = DB()
-
     if db.soundMode == "soundkit" then
         db.soundMode = "custom"
     else
         db.soundMode = "soundkit"
     end
 
-    wasAboveThreshold = false
-    lastSoundTime = 0
-
+    ResetAlertState()
     UpdateSoundModeButtonText()
 end)
 
@@ -467,17 +522,11 @@ end
 
 testBtn:SetScript("OnClick", function()
     testDisplayActive = not testDisplayActive
-    wasAboveThreshold = false
-    lastSoundTime = 0
 
+    ResetAlertState()
+    ResetTextCache()
     UpdateTestButtonText()
-
-    if testDisplayActive then
-        Update()
-    else
-        f:Hide()
-        Update()
-    end
+    Update()
 end)
 
 local resetBtn = CreateFrame("Button", nil, options, "UIPanelButtonTemplate")
@@ -486,7 +535,6 @@ resetBtn:SetPoint("LEFT", testBtn, "RIGHT", 12, 0)
 resetBtn:SetText("Reset Position")
 
 resetBtn:SetScript("OnClick", function()
-    local db = DB()
     db.x = defaults.x
     db.y = defaults.y
 
@@ -502,7 +550,9 @@ helpText:SetPoint("TOPLEFT", testBtn, "BOTTOMLEFT", 0, -24)
 helpText:SetText("<50% threshold = white, 50-100% = orange, above threshold = red")
 
 options:SetScript("OnShow", function()
-    local db = DB()
+    if not db then
+        return
+    end
 
     sizeEdit.Refresh()
     alertSizeEdit.Refresh()
@@ -527,33 +577,20 @@ end
 SLASH_MYSTAGGER1 = "/mystagger"
 
 SlashCmdList.MYSTAGGER = function(msg)
+    if not db then
+        return
+    end
+
     msg = msg and msg:lower() or ""
 
     if msg == "test" then
         testDisplayActive = not testDisplayActive
-        wasAboveThreshold = false
-        lastSoundTime = 0
+
+        ResetAlertState()
+        ResetTextCache()
 
         print("MyStagger test display: " .. (testDisplayActive and "on" or "off"))
         Update()
-        return
-    end
-
-    if msg == "soundkit" then
-        local db = DB()
-        db.soundMode = "soundkit"
-        wasAboveThreshold = false
-        lastSoundTime = 0
-        print("MyStagger sound: SOUNDKIT.RAID_WARNING")
-        return
-    end
-
-    if msg == "customsound" then
-        local db = DB()
-        db.soundMode = "custom"
-        wasAboveThreshold = false
-        lastSoundTime = 0
-        print("MyStagger sound:", db.customSoundFile)
         return
     end
 
@@ -564,9 +601,9 @@ SlashCmdList.MYSTAGGER = function(msg)
     end
 
     if msg == "reset" then
-        local db = DB()
         db.x = defaults.x
         db.y = defaults.y
+
         ApplySettings()
         Update()
         return
@@ -580,7 +617,23 @@ SlashCmdList.MYSTAGGER = function(msg)
     end
 end
 
-f:SetScript("OnEvent", function(_, event, unit)
+f:SetScript("OnEvent", function(_, event, arg1)
+    if event == "ADDON_LOADED" then
+        if arg1 ~= ADDON_NAME then
+            return
+        end
+
+        InitDB()
+        ApplySettings()
+
+        f:UnregisterEvent("ADDON_LOADED")
+        return
+    end
+
+    if not db then
+        return
+    end
+
     if event == "PLAYER_ENTERING_WORLD" then
         ApplySettings()
         RefreshBrewmasterState()
@@ -597,21 +650,10 @@ f:SetScript("OnEvent", function(_, event, unit)
             UpdateTalentState()
             Update()
         end
-
-        return
     end
-
-    if not active then
-        return
-    end
-
-    if unit and unit ~= "player" then
-        return
-    end
-
-    Update()
 end)
 
+f:RegisterEvent("ADDON_LOADED")
 f:RegisterEvent("PLAYER_ENTERING_WORLD")
 f:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
 f:RegisterEvent("PLAYER_TALENT_UPDATE")
