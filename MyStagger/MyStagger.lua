@@ -3,6 +3,9 @@ local ADDON_NAME = ...
 local BREWMASTER_SPEC_INDEX = 1
 local BOB_AND_WEAVE_SPELL_ID = 280515
 local UPDATE_INTERVAL = 0.15
+local SHARED_MEDIA_LIB = "LibSharedMedia-3.0"
+local DEFAULT_SHARED_MEDIA_SOUND = "Raid Warning"
+
 
 local active = false
 local elapsed = 0
@@ -11,12 +14,15 @@ local staggerDuration = 10
 local wasAboveThreshold = false
 local lastSoundTime = 0
 local testDisplayActive = false
+local playerIsMonk = false
+local lastModeMessage = nil
 
 local currentStyle = nil
 local lastDisplayedValue = nil
+local cachedMaxHP = nil
 
 local defaults = {
-    dbVersion = 2,
+    dbVersion = 4,
 
     x = 0,
     y = -200,
@@ -29,16 +35,18 @@ local defaults = {
     soundEnabled = true,
     soundCooldown = 3.0,
 
-    soundMode = "custom",
-
-    soundKit = SOUNDKIT.RAID_WARNING,
-    customSoundFile = "Interface\\AddOns\\MyStagger\\Media\\Pling1.ogg",
+    sharedMediaSound = DEFAULT_SHARED_MEDIA_SOUND,
 }
 
 local db
 
+local function GetDB()
+    return db or defaults
+end
+
 local function InitDB()
     MyStaggerData = MyStaggerData or {}
+    local savedDbVersion = MyStaggerData.dbVersion or 0
 
     for k, v in pairs(defaults) do
         if MyStaggerData[k] == nil then
@@ -46,17 +54,25 @@ local function InitDB()
         end
     end
 
-    if (MyStaggerData.dbVersion or 0) < 2 then
-        if type(MyStaggerData.soundFile) == "string" then
-            MyStaggerData.soundMode = "custom"
-            MyStaggerData.customSoundFile = MyStaggerData.soundFile
-        elseif type(MyStaggerData.soundFile) == "number" then
-            MyStaggerData.soundMode = "soundkit"
-            MyStaggerData.soundKit = MyStaggerData.soundFile
+    if savedDbVersion < 2 then
+        MyStaggerData.soundFile = nil
+        MyStaggerData.customSoundFile = nil
+        MyStaggerData.dbVersion = 2
+    end
+
+    if savedDbVersion < 3 then
+        if type(MyStaggerData.sharedMediaSound) ~= "string" then
+            MyStaggerData.sharedMediaSound = DEFAULT_SHARED_MEDIA_SOUND
         end
 
+        MyStaggerData.customSoundFile = nil
+        MyStaggerData.dbVersion = 3
+    end
+
+    if savedDbVersion < 4 then
+        MyStaggerData.customSoundFile = nil
         MyStaggerData.soundFile = nil
-        MyStaggerData.dbVersion = 2
+        MyStaggerData.dbVersion = 4
     end
 
     db = MyStaggerData
@@ -151,6 +167,37 @@ local function ApplySettings()
     SetTextStyle(0)
 end
 
+local function GetSharedMedia()
+    if LibStub then
+        return LibStub(SHARED_MEDIA_LIB, true)
+    end
+end
+
+local function GetSharedMediaSoundList()
+    local media = GetSharedMedia()
+
+    if media and media.List then
+        return media:List("sound") or {}
+    end
+
+    return {}
+end
+
+local function GetSharedMediaSoundFile()
+    local media = GetSharedMedia()
+
+    if not media or not media.Fetch then
+        return nil
+    end
+
+    local key = db.sharedMediaSound or DEFAULT_SHARED_MEDIA_SOUND
+    return media:Fetch("sound", key, true)
+end
+
+local function PlayFallbackSound()
+    PlaySound(SOUNDKIT.RAID_WARNING, "Master")
+end
+
 local function PlayAlertSound()
     if not db.soundEnabled then
         return
@@ -163,21 +210,61 @@ local function PlayAlertSound()
 
     lastSoundTime = now
 
-    if db.soundMode == "soundkit" then
-        PlaySound(db.soundKit or SOUNDKIT.RAID_WARNING, "Master")
+    local soundFile = GetSharedMediaSoundFile()
+
+    if not soundFile then
+        PlayFallbackSound()
         return
     end
 
-    local ok = PlaySoundFile(db.customSoundFile, "Master")
+    local ok = PlaySoundFile(soundFile, "Master")
 
     if not ok then
-        print("MyStagger: Could not play custom sound:", db.customSoundFile)
+        PlayFallbackSound()
     end
 end
 
-local function IsBrewmaster()
+local function IsMonk()
     local _, class = UnitClass("player")
-    return class == "MONK" and GetSpecialization() == BREWMASTER_SPEC_INDEX
+    return class == "MONK"
+end
+
+local function GetSpecName()
+    local specIndex = GetSpecialization()
+
+    if not specIndex then
+        return "No specialization"
+    end
+
+    local _, specName = GetSpecializationInfo(specIndex)
+    return specName or ("Spec " .. specIndex)
+end
+
+local function IsBrewmaster()
+    return playerIsMonk and GetSpecialization() == BREWMASTER_SPEC_INDEX
+end
+
+local function PrintModeMessage(enabled)
+    local specName = playerIsMonk and GetSpecName() or "Non-Monk"
+    local message = enabled and ("enabled - " .. specName) or ("disabled - " .. specName)
+
+    if message == lastModeMessage then
+        return
+    end
+
+    lastModeMessage = message
+    print("MyStagger: " .. message)
+end
+
+
+local function DisableModuleEventsForNonMonk()
+    frame:SetScript("OnUpdate", nil)
+    frame:UnregisterEvent("PLAYER_LOGIN")
+    frame:UnregisterEvent("PLAYER_ENTERING_WORLD")
+    frame:UnregisterEvent("PLAYER_SPECIALIZATION_CHANGED")
+    frame:UnregisterEvent("PLAYER_TALENT_UPDATE")
+    frame:UnregisterEvent("TRAIT_CONFIG_UPDATED")
+    frame:UnregisterEvent("UNIT_MAXHEALTH")
 end
 
 local function HasBobAndWeave()
@@ -190,6 +277,19 @@ end
 
 local function UpdateTalentState()
     staggerDuration = HasBobAndWeave() and 15 or 10
+end
+
+local function RefreshMaxHealth()
+    cachedMaxHP = UnitHealthMax("player") or 0
+    return cachedMaxHP
+end
+
+local function GetCachedMaxHealth()
+    if not cachedMaxHP or cachedMaxHP <= 0 then
+        return RefreshMaxHealth()
+    end
+
+    return cachedMaxHP
 end
 
 local function ShowValue(perSecondPercent)
@@ -226,7 +326,7 @@ local function Update()
     end
 
     local stagger = UnitStagger("player") or 0
-    local maxHP = UnitHealthMax("player") or 0
+    local maxHP = GetCachedMaxHealth()
 
     if stagger <= 0 or maxHP <= 0 then
         HideDisplay()
@@ -250,6 +350,8 @@ end
 
 local function EnableBrewmasterMode()
     if active then
+        UpdateTalentState()
+        Update()
         return
     end
 
@@ -261,17 +363,25 @@ local function EnableBrewmasterMode()
 
     frame:SetScript("OnUpdate", OnUpdate)
 
+    RefreshMaxHealth()
     UpdateTalentState()
     Update()
+    PrintModeMessage(true)
 end
 
 local function DisableBrewmasterMode()
     if not active then
+        frame:SetScript("OnUpdate", nil)
+        if not testDisplayActive then
+            HideDisplay()
+        end
+        PrintModeMessage(false)
         return
     end
 
     active = false
     elapsed = 0
+    cachedMaxHP = nil
 
     ResetAlertState()
     ResetTextCache()
@@ -281,13 +391,30 @@ local function DisableBrewmasterMode()
     if not testDisplayActive then
         HideDisplay()
     end
+
+    PrintModeMessage(false)
 end
 
 local function RefreshBrewmasterState()
+    playerIsMonk = IsMonk()
+
     if IsBrewmaster() then
         EnableBrewmasterMode()
     else
         DisableBrewmasterMode()
+
+        if not playerIsMonk then
+            DisableModuleEventsForNonMonk()
+        end
+    end
+end
+
+local function RefreshBrewmasterStateSoon()
+    RefreshBrewmasterState()
+
+    if playerIsMonk and C_Timer and C_Timer.After then
+        C_Timer.After(0.5, RefreshBrewmasterState)
+        C_Timer.After(2.0, RefreshBrewmasterState)
     end
 end
 
@@ -335,13 +462,12 @@ local function SetSoundEnabled(value)
     ResetAlertState()
 end
 
-local function ToggleSoundMode()
-    if db.soundMode == "soundkit" then
-        db.soundMode = "custom"
-    else
-        db.soundMode = "soundkit"
+local function SetSharedMediaSound(soundName)
+    if type(soundName) ~= "string" or soundName == "" then
+        return
     end
 
+    db.sharedMediaSound = soundName
     ResetAlertState()
 end
 
@@ -425,6 +551,46 @@ local function MakeNumericEditBox(parent, labelText, x, y, width, minValue, maxV
     end
 
     return editBox
+end
+
+local function CreateSharedMediaSoundDropdown(parent, anchor)
+    local dropdown = CreateFrame("Frame", nil, parent, "UIDropDownMenuTemplate")
+    dropdown:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", -16, -34)
+
+    UIDropDownMenu_SetWidth(dropdown, 220)
+
+    local function RefreshText()
+        local activeDb = GetDB()
+        UIDropDownMenu_SetText(dropdown, activeDb.sharedMediaSound or DEFAULT_SHARED_MEDIA_SOUND)
+    end
+
+    UIDropDownMenu_Initialize(dropdown, function(self, level)
+        local sounds = GetSharedMediaSoundList()
+
+        if #sounds == 0 then
+            local info = UIDropDownMenu_CreateInfo()
+            info.text = "No SharedMedia sounds found"
+            info.disabled = true
+            UIDropDownMenu_AddButton(info, level)
+            return
+        end
+
+        table.sort(sounds)
+
+        for _, soundName in ipairs(sounds) do
+            local info = UIDropDownMenu_CreateInfo()
+            info.text = soundName
+            info.checked = soundName == GetDB().sharedMediaSound
+            info.func = function()
+                SetSharedMediaSound(soundName)
+                RefreshText()
+            end
+            UIDropDownMenu_AddButton(info, level)
+        end
+    end)
+
+    dropdown.Refresh = RefreshText
+    return dropdown
 end
 
 local function CreateOptionsPanel()
@@ -521,13 +687,15 @@ local function CreateOptionsPanel()
     soundTestBtn:SetPoint("LEFT", soundBtn, "RIGHT", 12, 0)
     soundTestBtn:SetText("Test Sound")
 
-    local soundModeBtn = CreateFrame("Button", nil, options, "UIPanelButtonTemplate")
-    soundModeBtn:SetSize(180, 24)
-    soundModeBtn:SetPoint("TOPLEFT", soundBtn, "BOTTOMLEFT", 0, -12)
+    local sharedMediaLabel = options:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+    sharedMediaLabel:SetPoint("TOPLEFT", soundBtn, "BOTTOMLEFT", 0, -24)
+    sharedMediaLabel:SetText("Alert Sound")
+
+    local sharedMediaDropdown = CreateSharedMediaSoundDropdown(options, sharedMediaLabel)
 
     local testBtn = CreateFrame("Button", nil, options, "UIPanelButtonTemplate")
     testBtn:SetSize(140, 24)
-    testBtn:SetPoint("TOPLEFT", soundModeBtn, "BOTTOMLEFT", 0, -16)
+    testBtn:SetPoint("TOPLEFT", sharedMediaDropdown, "BOTTOMLEFT", 16, -16)
 
     local resetBtn = CreateFrame("Button", nil, options, "UIPanelButtonTemplate")
     resetBtn:SetSize(140, 24)
@@ -542,14 +710,6 @@ local function CreateOptionsPanel()
         soundBtn:SetText(db.soundEnabled and "Sound: On" or "Sound: Off")
     end
 
-    local function UpdateSoundModeButtonText()
-        if db.soundMode == "soundkit" then
-            soundModeBtn:SetText("Sound Type: Raid Warning")
-        else
-            soundModeBtn:SetText("Sound Type: Custom")
-        end
-    end
-
     local function UpdateTestButtonText()
         testBtn:SetText(testDisplayActive and "Test: On" or "Test: Off")
     end
@@ -562,11 +722,6 @@ local function CreateOptionsPanel()
     soundTestBtn:SetScript("OnClick", function()
         lastSoundTime = 0
         PlayAlertSound()
-    end)
-
-    soundModeBtn:SetScript("OnClick", function()
-        ToggleSoundMode()
-        UpdateSoundModeButtonText()
     end)
 
     testBtn:SetScript("OnClick", function()
@@ -595,8 +750,8 @@ local function CreateOptionsPanel()
         thresholdSlider.Text:SetText(string.format("%.1f%%/s", db.alertThreshold))
 
         UpdateSoundButtonText()
-        UpdateSoundModeButtonText()
         UpdateTestButtonText()
+        sharedMediaDropdown.Refresh()
     end)
 
     return options
@@ -615,6 +770,11 @@ SLASH_MYSTAGGER1 = "/mystagger"
 
 SlashCmdList.MYSTAGGER = function(msg)
     if not db then
+        return
+    end
+
+    if not playerIsMonk and not IsMonk() then
+        print("MyStagger: disabled - Non-Monk")
         return
     end
 
@@ -662,9 +822,23 @@ frame:SetScript("OnEvent", function(_, event, arg1)
         return
     end
 
-    if event == "PLAYER_ENTERING_WORLD" then
+    if event == "PLAYER_LOGIN" or event == "PLAYER_ENTERING_WORLD" then
         ApplySettings()
-        RefreshBrewmasterState()
+        RefreshBrewmasterStateSoon()
+        return
+    end
+
+    if not playerIsMonk then
+        return
+    end
+
+    if event == "UNIT_MAXHEALTH" then
+        if arg1 == "player" then
+            RefreshMaxHealth()
+            if active then
+                Update()
+            end
+        end
         return
     end
 
@@ -672,7 +846,11 @@ frame:SetScript("OnEvent", function(_, event, arg1)
         or event == "PLAYER_TALENT_UPDATE"
         or event == "TRAIT_CONFIG_UPDATED" then
 
-        RefreshBrewmasterState()
+        if event == "PLAYER_SPECIALIZATION_CHANGED" and arg1 and arg1 ~= "player" then
+            return
+        end
+
+        RefreshBrewmasterStateSoon()
 
         if active then
             UpdateTalentState()
@@ -682,7 +860,9 @@ frame:SetScript("OnEvent", function(_, event, arg1)
 end)
 
 frame:RegisterEvent("ADDON_LOADED")
+frame:RegisterEvent("PLAYER_LOGIN")
 frame:RegisterEvent("PLAYER_ENTERING_WORLD")
+frame:RegisterUnitEvent("UNIT_MAXHEALTH", "player")
 frame:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
 frame:RegisterEvent("PLAYER_TALENT_UPDATE")
 frame:RegisterEvent("TRAIT_CONFIG_UPDATED")
