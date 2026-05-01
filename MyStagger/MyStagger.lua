@@ -1,11 +1,21 @@
 local ADDON_NAME = ...
 
+local _, playerClass = UnitClass("player")
+if playerClass ~= "MONK" then
+    return
+end
+
+local LSM = LibStub and LibStub("LibSharedMedia-3.0", true)
+
 local BREWMASTER_SPEC_INDEX = 1
 local BOB_AND_WEAVE_SPELL_ID = 280515
-local UPDATE_INTERVAL = 0.15
+
+local UPDATE_INTERVAL_ACTIVE = 0.10
+local UPDATE_INTERVAL_IDLE = 0.35
 
 local active = false
 local elapsed = 0
+local updateInterval = UPDATE_INTERVAL_IDLE
 local staggerDuration = 10
 
 local wasAboveThreshold = false
@@ -15,8 +25,11 @@ local testDisplayActive = false
 local currentStyle = nil
 local lastDisplayedValue = nil
 
+local options
+local settingsCategory
+
 local defaults = {
-    dbVersion = 2,
+    dbVersion = 3,
 
     x = 0,
     y = -200,
@@ -29,10 +42,7 @@ local defaults = {
     soundEnabled = true,
     soundCooldown = 3.0,
 
-    soundMode = "custom",
-
-    soundKit = SOUNDKIT.RAID_WARNING,
-    customSoundFile = "Interface\\AddOns\\MyStagger\\Media\\Pling1.ogg",
+    sharedMediaSound = "MyStagger Pling",
 }
 
 local db
@@ -40,23 +50,18 @@ local db
 local function InitDB()
     MyStaggerData = MyStaggerData or {}
 
+    if (MyStaggerData.dbVersion or 0) < 3 then
+        MyStaggerData.soundMode = nil
+        MyStaggerData.soundKit = nil
+        MyStaggerData.soundFile = nil
+        MyStaggerData.customSoundFile = nil
+        MyStaggerData.dbVersion = 3
+    end
+
     for k, v in pairs(defaults) do
         if MyStaggerData[k] == nil then
             MyStaggerData[k] = v
         end
-    end
-
-    if (MyStaggerData.dbVersion or 0) < 2 then
-        if type(MyStaggerData.soundFile) == "string" then
-            MyStaggerData.soundMode = "custom"
-            MyStaggerData.customSoundFile = MyStaggerData.soundFile
-        elseif type(MyStaggerData.soundFile) == "number" then
-            MyStaggerData.soundMode = "soundkit"
-            MyStaggerData.soundKit = MyStaggerData.soundFile
-        end
-
-        MyStaggerData.soundFile = nil
-        MyStaggerData.dbVersion = 2
     end
 
     db = MyStaggerData
@@ -65,8 +70,8 @@ end
 local frame = CreateFrame("Frame", ADDON_NAME .. "Frame", UIParent)
 frame:SetSize(260, 32)
 frame:SetMovable(true)
-frame:EnableMouse(true)
 frame:RegisterForDrag("LeftButton")
+frame:EnableMouse(false)
 frame:Hide()
 
 local displayText = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
@@ -124,7 +129,7 @@ local function SetDisplayText(perSecondPercent)
     end
 
     lastDisplayedValue = rounded
-    displayText:SetText(string.format("%.2f%%/s", rounded))
+    displayText:SetFormattedText("%.2f%%/s", rounded)
 end
 
 local function ShowDisplay()
@@ -151,6 +156,14 @@ local function ApplySettings()
     SetTextStyle(0)
 end
 
+local function GetSharedMediaSoundPath()
+    if not LSM or not db.sharedMediaSound then
+        return nil
+    end
+
+    return LSM:Fetch("sound", db.sharedMediaSound, true)
+end
+
 local function PlayAlertSound()
     if not db.soundEnabled then
         return
@@ -163,21 +176,21 @@ local function PlayAlertSound()
 
     lastSoundTime = now
 
-    if db.soundMode == "soundkit" then
-        PlaySound(db.soundKit or SOUNDKIT.RAID_WARNING, "Master")
-        return
+    local soundFile = GetSharedMediaSoundPath()
+
+    if soundFile then
+        local ok = PlaySoundFile(soundFile, "Master")
+
+        if ok then
+            return
+        end
     end
 
-    local ok = PlaySoundFile(db.customSoundFile, "Master")
-
-    if not ok then
-        print("MyStagger: Could not play custom sound:", db.customSoundFile)
-    end
+    PlaySound(SOUNDKIT.RAID_WARNING, "Master")
 end
 
 local function IsBrewmaster()
-    local _, class = UnitClass("player")
-    return class == "MONK" and GetSpecialization() == BREWMASTER_SPEC_INDEX
+    return GetSpecialization() == BREWMASTER_SPEC_INDEX
 end
 
 local function HasBobAndWeave()
@@ -207,21 +220,13 @@ local function ShowValue(perSecondPercent)
 end
 
 local function ShowTestValue()
+    updateInterval = UPDATE_INTERVAL_ACTIVE
     ShowValue(db.alertThreshold + 0.25)
 end
 
 local function Update()
-    if not db then
-        return
-    end
-
     if testDisplayActive then
         ShowTestValue()
-        return
-    end
-
-    if not active then
-        HideDisplay()
         return
     end
 
@@ -229,9 +234,12 @@ local function Update()
     local maxHP = UnitHealthMax("player") or 0
 
     if stagger <= 0 or maxHP <= 0 then
+        updateInterval = UPDATE_INTERVAL_IDLE
         HideDisplay()
         return
     end
+
+    updateInterval = UPDATE_INTERVAL_ACTIVE
 
     local totalPercent = stagger / maxHP * 100
     local perSecondPercent = totalPercent / staggerDuration
@@ -242,8 +250,8 @@ end
 local function OnUpdate(_, delta)
     elapsed = elapsed + delta
 
-    if elapsed >= UPDATE_INTERVAL then
-        elapsed = elapsed - UPDATE_INTERVAL
+    if elapsed >= updateInterval then
+        elapsed = 0
         Update()
     end
 end
@@ -255,13 +263,13 @@ local function EnableBrewmasterMode()
 
     active = true
     elapsed = 0
+    updateInterval = UPDATE_INTERVAL_IDLE
 
     ResetAlertState()
     ResetTextCache()
 
-    frame:SetScript("OnUpdate", OnUpdate)
-
     UpdateTalentState()
+    frame:SetScript("OnUpdate", OnUpdate)
     Update()
 end
 
@@ -272,6 +280,7 @@ local function DisableBrewmasterMode()
 
     active = false
     elapsed = 0
+    updateInterval = UPDATE_INTERVAL_IDLE
 
     ResetAlertState()
     ResetTextCache()
@@ -335,31 +344,45 @@ local function SetSoundEnabled(value)
     ResetAlertState()
 end
 
-local function ToggleSoundMode()
-    if db.soundMode == "soundkit" then
-        db.soundMode = "custom"
-    else
-        db.soundMode = "soundkit"
-    end
-
+local function SetSharedMediaSound(soundName)
+    db.sharedMediaSound = soundName
     ResetAlertState()
 end
 
-local function ToggleTestDisplay()
-    testDisplayActive = not testDisplayActive
+local function SetTestDisplayEnabled(enabled)
+    testDisplayActive = enabled and true or false
+    frame:EnableMouse(testDisplayActive)
 
     ResetAlertState()
     ResetTextCache()
-    Update()
+
+    if testDisplayActive then
+        frame:SetScript("OnUpdate", OnUpdate)
+        elapsed = 0
+        updateInterval = UPDATE_INTERVAL_ACTIVE
+        Update()
+    else
+        if not active then
+            frame:SetScript("OnUpdate", nil)
+            HideDisplay()
+        else
+            Update()
+        end
+    end
+end
+
+local function ToggleTestDisplay()
+    SetTestDisplayEnabled(not testDisplayActive)
 end
 
 local function ResetPosition()
     SetPosition(defaults.x, defaults.y)
 end
 
--- Dragging
 frame:SetScript("OnDragStart", function(self)
-    self:StartMoving()
+    if testDisplayActive then
+        self:StartMoving()
+    end
 end)
 
 frame:SetScript("OnDragStop", function(self)
@@ -427,75 +450,49 @@ local function MakeNumericEditBox(parent, labelText, x, y, width, minValue, maxV
     return editBox
 end
 
-local function CreateOptionsPanel()
-    local options = CreateFrame("Frame")
-    options.name = "MyStagger"
+local function GetSharedMediaSoundList()
+    if not LSM then
+        return nil
+    end
 
-    local title = options:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
+    local sounds = LSM:List("sound")
+    if not sounds then
+        return nil
+    end
+
+    table.sort(sounds)
+    return sounds
+end
+
+local function CreateOptionsPanel()
+    local panel = CreateFrame("Frame")
+    panel.name = "MyStagger"
+
+    local title = panel:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
     title:SetPoint("TOPLEFT", 16, -16)
     title:SetText("MyStagger")
 
-    local sizeEdit = MakeNumericEditBox(
-        options,
-        "Normal Font Size",
-        16,
-        -64,
-        80,
-        10,
-        36,
-        function()
-            return db.fontSize
-        end,
-        SetFontSize
-    )
+    local sizeEdit = MakeNumericEditBox(panel, "Normal Font Size", 16, -64, 80, 10, 36, function()
+        return db.fontSize
+    end, SetFontSize)
 
-    local alertSizeEdit = MakeNumericEditBox(
-        options,
-        "Alert Font Size",
-        140,
-        -64,
-        80,
-        10,
-        48,
-        function()
-            return db.alertFontSize
-        end,
-        SetAlertFontSize
-    )
+    local alertSizeEdit = MakeNumericEditBox(panel, "Alert Font Size", 140, -64, 80, 10, 48, function()
+        return db.alertFontSize
+    end, SetAlertFontSize)
 
-    local xEdit = MakeNumericEditBox(
-        options,
-        "X Position",
-        16,
-        -130,
-        80,
-        -2000,
-        2000,
-        function()
-            return db.x
-        end,
-        SetXPosition
-    )
+    local xEdit = MakeNumericEditBox(panel, "X Position", 16, -130, 80, -2000, 2000, function()
+        return db.x
+    end, SetXPosition)
 
-    local yEdit = MakeNumericEditBox(
-        options,
-        "Y Position",
-        140,
-        -130,
-        80,
-        -2000,
-        2000,
-        function()
-            return db.y
-        end,
-        SetYPosition
-    )
+    local yEdit = MakeNumericEditBox(panel, "Y Position", 140, -130, 80, -2000, 2000, function()
+        return db.y
+    end, SetYPosition)
 
-    local thresholdLabel = options:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+    local thresholdLabel = panel:CreateFontString(nil, "ARTWORK", "GameFontNormal")
     thresholdLabel:SetPoint("TOPLEFT", 16, -200)
     thresholdLabel:SetText("Alert Threshold: HP% per second")
 
-    local thresholdSlider = CreateFrame("Slider", nil, options, "OptionsSliderTemplate")
+    local thresholdSlider = CreateFrame("Slider", nil, panel, "OptionsSliderTemplate")
     thresholdSlider:SetPoint("TOPLEFT", thresholdLabel, "BOTTOMLEFT", 0, -12)
     thresholdSlider:SetMinMaxValues(0.5, 20)
     thresholdSlider:SetValueStep(0.1)
@@ -508,33 +505,39 @@ local function CreateOptionsPanel()
     thresholdSlider:SetScript("OnValueChanged", function(_, value)
         local rounded = math.floor(value * 10 + 0.5) / 10
 
-        SetAlertThreshold(rounded)
-        thresholdSlider.Text:SetText(string.format("%.1f%%/s", db.alertThreshold))
+        if rounded ~= db.alertThreshold then
+            SetAlertThreshold(rounded)
+        end
+
+        thresholdSlider.Text:SetFormattedText("%.1f%%/s", db.alertThreshold)
     end)
 
-    local soundBtn = CreateFrame("Button", nil, options, "UIPanelButtonTemplate")
+    local soundBtn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
     soundBtn:SetSize(140, 24)
     soundBtn:SetPoint("TOPLEFT", thresholdSlider, "BOTTOMLEFT", 0, -32)
 
-    local soundTestBtn = CreateFrame("Button", nil, options, "UIPanelButtonTemplate")
+    local soundTestBtn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
     soundTestBtn:SetSize(120, 24)
     soundTestBtn:SetPoint("LEFT", soundBtn, "RIGHT", 12, 0)
     soundTestBtn:SetText("Test Sound")
 
-    local soundModeBtn = CreateFrame("Button", nil, options, "UIPanelButtonTemplate")
-    soundModeBtn:SetSize(180, 24)
-    soundModeBtn:SetPoint("TOPLEFT", soundBtn, "BOTTOMLEFT", 0, -12)
+    local soundLabel = panel:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+    soundLabel:SetPoint("TOPLEFT", soundBtn, "BOTTOMLEFT", 0, -18)
+    soundLabel:SetText("SharedMedia Sound")
 
-    local testBtn = CreateFrame("Button", nil, options, "UIPanelButtonTemplate")
+    local soundDropdown = CreateFrame("Frame", nil, panel, "UIDropDownMenuTemplate")
+    soundDropdown:SetPoint("TOPLEFT", soundLabel, "BOTTOMLEFT", -16, -6)
+
+    local testBtn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
     testBtn:SetSize(140, 24)
-    testBtn:SetPoint("TOPLEFT", soundModeBtn, "BOTTOMLEFT", 0, -16)
+    testBtn:SetPoint("TOPLEFT", soundDropdown, "BOTTOMLEFT", 16, -16)
 
-    local resetBtn = CreateFrame("Button", nil, options, "UIPanelButtonTemplate")
+    local resetBtn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
     resetBtn:SetSize(140, 24)
     resetBtn:SetPoint("LEFT", testBtn, "RIGHT", 12, 0)
     resetBtn:SetText("Reset Position")
 
-    local helpText = options:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+    local helpText = panel:CreateFontString(nil, "ARTWORK", "GameFontNormal")
     helpText:SetPoint("TOPLEFT", testBtn, "BOTTOMLEFT", 0, -24)
     helpText:SetText("<50% threshold = white, 50-100% = orange, above threshold = red")
 
@@ -542,17 +545,45 @@ local function CreateOptionsPanel()
         soundBtn:SetText(db.soundEnabled and "Sound: On" or "Sound: Off")
     end
 
-    local function UpdateSoundModeButtonText()
-        if db.soundMode == "soundkit" then
-            soundModeBtn:SetText("Sound Type: Raid Warning")
-        else
-            soundModeBtn:SetText("Sound Type: Custom")
-        end
-    end
-
     local function UpdateTestButtonText()
         testBtn:SetText(testDisplayActive and "Test: On" or "Test: Off")
     end
+
+    local function UpdateSoundDropdownText()
+        if LSM then
+            UIDropDownMenu_SetText(soundDropdown, db.sharedMediaSound or "Select sound")
+        else
+            UIDropDownMenu_SetText(soundDropdown, "Raid Warning fallback")
+        end
+    end
+
+    local function InitializeSoundDropdown(_, level)
+        local sounds = GetSharedMediaSoundList()
+
+        if not sounds or #sounds == 0 then
+            local info = UIDropDownMenu_CreateInfo()
+            info.text = "SharedMedia unavailable"
+            info.disabled = true
+            UIDropDownMenu_AddButton(info, level)
+            return
+        end
+
+        for _, soundName in ipairs(sounds) do
+            local info = UIDropDownMenu_CreateInfo()
+            info.text = soundName
+            info.checked = soundName == db.sharedMediaSound
+            info.func = function()
+                SetSharedMediaSound(soundName)
+                UpdateSoundDropdownText()
+            end
+
+            UIDropDownMenu_AddButton(info, level)
+        end
+    end
+
+    UIDropDownMenu_SetWidth(soundDropdown, 220)
+    UIDropDownMenu_Initialize(soundDropdown, InitializeSoundDropdown)
+    UpdateSoundDropdownText()
 
     soundBtn:SetScript("OnClick", function()
         SetSoundEnabled(not db.soundEnabled)
@@ -564,11 +595,6 @@ local function CreateOptionsPanel()
         PlayAlertSound()
     end)
 
-    soundModeBtn:SetScript("OnClick", function()
-        ToggleSoundMode()
-        UpdateSoundModeButtonText()
-    end)
-
     testBtn:SetScript("OnClick", function()
         ToggleTestDisplay()
         UpdateTestButtonText()
@@ -576,36 +602,28 @@ local function CreateOptionsPanel()
 
     resetBtn:SetScript("OnClick", function()
         ResetPosition()
-
         xEdit.Refresh()
         yEdit.Refresh()
     end)
 
-    options:SetScript("OnShow", function()
-        if not db then
-            return
-        end
-
+    panel:SetScript("OnShow", function()
         sizeEdit.Refresh()
         alertSizeEdit.Refresh()
         xEdit.Refresh()
         yEdit.Refresh()
 
         thresholdSlider:SetValue(db.alertThreshold)
-        thresholdSlider.Text:SetText(string.format("%.1f%%/s", db.alertThreshold))
+        thresholdSlider.Text:SetFormattedText("%.1f%%/s", db.alertThreshold)
 
         UpdateSoundButtonText()
-        UpdateSoundModeButtonText()
+        UpdateSoundDropdownText()
         UpdateTestButtonText()
     end)
 
-    return options
+    return panel
 end
 
-local options
-local settingsCategory
-
-local function RegisterOptionsPanel()
+local function EnsureOptionsPanel()
     if options then
         return
     end
@@ -620,31 +638,8 @@ local function RegisterOptionsPanel()
     end
 end
 
-SLASH_MYSTAGGER1 = "/mystagger"
-
-SlashCmdList.MYSTAGGER = function(msg)
-    if not db then
-        return
-    end
-
-    msg = msg and msg:lower() or ""
-
-    if msg == "test" then
-        ToggleTestDisplay()
-        print("MyStagger test display: " .. (testDisplayActive and "on" or "off"))
-        return
-    end
-
-    if msg == "sound" then
-        lastSoundTime = 0
-        PlayAlertSound()
-        return
-    end
-
-    if msg == "reset" then
-        ResetPosition()
-        return
-    end
+local function OpenOptionsPanel()
+    EnsureOptionsPanel()
 
     if Settings and Settings.OpenToCategory and settingsCategory then
         Settings.OpenToCategory(settingsCategory:GetID())
@@ -652,6 +647,34 @@ SlashCmdList.MYSTAGGER = function(msg)
         Settings.OpenToCategory("MyStagger")
     else
         InterfaceOptionsFrame_OpenToCategory(options)
+        InterfaceOptionsFrame_OpenToCategory(options)
+    end
+end
+
+local function RegisterSlashCommand()
+    SLASH_MYSTAGGER1 = "/mystagger"
+
+    SlashCmdList.MYSTAGGER = function(msg)
+        msg = msg and msg:lower() or ""
+
+        if msg == "test" then
+            ToggleTestDisplay()
+            print("MyStagger test display: " .. (testDisplayActive and "on" or "off"))
+            return
+        end
+
+        if msg == "sound" then
+            lastSoundTime = 0
+            PlayAlertSound()
+            return
+        end
+
+        if msg == "reset" then
+            ResetPosition()
+            return
+        end
+
+        OpenOptionsPanel()
     end
 end
 
@@ -663,7 +686,7 @@ frame:SetScript("OnEvent", function(_, event, arg1)
 
         InitDB()
         ApplySettings()
-        RegisterOptionsPanel()
+        RegisterSlashCommand()
 
         frame:UnregisterEvent("ADDON_LOADED")
         return
