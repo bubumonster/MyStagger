@@ -602,22 +602,13 @@ local function CreateOptionsPanel()
     return options
 end
 
-local options
-local settingsCategory
+local options = CreateOptionsPanel()
 
-local function RegisterOptionsPanel()
-    if options then
-        return
-    end
-
-    options = CreateOptionsPanel()
-
-    if Settings and Settings.RegisterCanvasLayoutCategory then
-        settingsCategory = Settings.RegisterCanvasLayoutCategory(options, options.name)
-        Settings.RegisterAddOnCategory(settingsCategory)
-    else
-        InterfaceOptions_AddCategory(options)
-    end
+if Settings and Settings.RegisterCanvasLayoutCategory then
+    local category = Settings.RegisterCanvasLayoutCategory(options, options.name)
+    Settings.RegisterAddOnCategory(category)
+else
+    InterfaceOptions_AddCategory(options)
 end
 
 SLASH_MYSTAGGER1 = "/mystagger"
@@ -646,11 +637,10 @@ SlashCmdList.MYSTAGGER = function(msg)
         return
     end
 
-    if Settings and Settings.OpenToCategory and settingsCategory then
-        Settings.OpenToCategory(settingsCategory:GetID())
-    elseif Settings and Settings.OpenToCategory then
+    if Settings and Settings.OpenToCategory then
         Settings.OpenToCategory("MyStagger")
     else
+        InterfaceOptionsFrame_OpenToCategory(options)
         InterfaceOptionsFrame_OpenToCategory(options)
     end
 end
@@ -663,7 +653,6 @@ frame:SetScript("OnEvent", function(_, event, arg1)
 
         InitDB()
         ApplySettings()
-        RegisterOptionsPanel()
 
         frame:UnregisterEvent("ADDON_LOADED")
         return
