@@ -132,15 +132,17 @@ local function SetTextStyle(perSecondPercent)
     end
 end
 
-local function SetDisplayText(perSecondPercent)
-    local rounded = math.floor(perSecondPercent * 100 + 0.5) / 100
+local function SetDisplayText(totalPercent, perSecondPercent)
+    local roundedTotal = math.floor(totalPercent * 100 + 0.5) / 100
+    local roundedPerSecond = math.floor(perSecondPercent * 100 + 0.5) / 100
+    local displayValue = roundedTotal .. ":" .. roundedPerSecond
 
-    if rounded == lastDisplayedValue then
+    if displayValue == lastDisplayedValue then
         return
     end
 
-    lastDisplayedValue = rounded
-    displayText:SetText(string.format("%.2f%%/s", rounded))
+    lastDisplayedValue = displayValue
+    displayText:SetText(string.format("%.2f%%  %.2f%%/s", roundedTotal, roundedPerSecond))
 end
 
 local function ShowDisplay()
@@ -292,11 +294,11 @@ local function GetCachedMaxHealth()
     return cachedMaxHP
 end
 
-local function ShowValue(perSecondPercent)
+local function ShowValue(totalPercent, perSecondPercent)
     local isAboveThreshold = perSecondPercent >= db.alertThreshold
 
     SetTextStyle(perSecondPercent)
-    SetDisplayText(perSecondPercent)
+    SetDisplayText(totalPercent, perSecondPercent)
 
     if isAboveThreshold and not wasAboveThreshold then
         PlayAlertSound()
@@ -307,7 +309,10 @@ local function ShowValue(perSecondPercent)
 end
 
 local function ShowTestValue()
-    ShowValue(db.alertThreshold + 0.25)
+    local perSecondPercent = db.alertThreshold + 0.25
+    local totalPercent = perSecondPercent * staggerDuration
+
+    ShowValue(totalPercent, perSecondPercent)
 end
 
 local function Update()
@@ -336,7 +341,7 @@ local function Update()
     local totalPercent = stagger / maxHP * 100
     local perSecondPercent = totalPercent / staggerDuration
 
-    ShowValue(perSecondPercent)
+    ShowValue(totalPercent, perSecondPercent)
 end
 
 local function OnUpdate(_, delta)
@@ -659,7 +664,7 @@ local function CreateOptionsPanel()
 
     local thresholdLabel = options:CreateFontString(nil, "ARTWORK", "GameFontNormal")
     thresholdLabel:SetPoint("TOPLEFT", 16, -200)
-    thresholdLabel:SetText("Alert Threshold: HP% per second")
+    thresholdLabel:SetText("Alert Threshold: stagger HP% per second")
 
     local thresholdSlider = CreateFrame("Slider", nil, options, "OptionsSliderTemplate")
     thresholdSlider:SetPoint("TOPLEFT", thresholdLabel, "BOTTOMLEFT", 0, -12)
