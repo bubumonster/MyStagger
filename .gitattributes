@@ -1,0 +1,27 @@
+* text=auto eol=lf
+*.lua text eol=lf
+*.toc text eol=lf
+*.xml text eol=lf
+*.sh text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf
+*.toml text eol=lf
+*.md text eol=lf
+*.ogg binary
+*.mp3 binary
+*.wav binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.tga binary
+*.blp binary
+*.zip binary
+
+*.bak binary
+*.back binary
+*.lua binary
+*.MD5 binary
+*.old binary
+*.txt binary
+*.wtf binary

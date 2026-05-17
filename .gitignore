@@ -1,0 +1,19 @@
+# Git ignore rules
+build/*.zip
+build/*.7z
+build/*.bak
+build/*.tmp
+
+**/desktop.ini
+*/desktop.ini
+desktop.ini
+
+wow-api/
+
+
+.release/
+releases/latest/
+
+*.log
+*.tmp
+.DS_Store

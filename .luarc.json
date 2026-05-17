@@ -1,0 +1,53 @@
+{
+    "runtime": {
+        "version": "Lua 5.1"
+    },
+    "diagnostics": {
+        "globals": [
+            "CreateFrame",
+            "UIParent",
+            "C_Spell",
+            "C_UnitAuras",
+            "C_EncounterTimeline",
+            "C_EncounterWarnings",
+            "C_EncounterEvents",
+            "SlashCmdList",
+            "PlaySound",
+            "PlaySoundFile",
+            "UnitExists",
+            "UnitGUID",
+            "UnitAura",
+            "UnitCastingInfo",
+            "UnitChannelInfo",
+            "GetTime",
+            "InCombatLockdown",
+            "LibStub"
+        ]
+    },
+    "workspace": {
+        "checkThirdParty": false,
+        "library": [
+            "./wow-api/wow-ui-source"
+        ],
+        "ignoreDir": [
+            ".git",
+            ".release",
+            "releases"
+        ]
+    },
+    "completion": {
+        "callSnippet": "Replace"
+    },
+    "hint": {
+        "enable": true,
+        "arrayIndex": "Disable",
+        "await": true,
+        "paramName": "All",
+        "paramType": true,
+        "semicolon": "Disable",
+        "setType": true
+    },
+    "telemetry": {
+        "enable": false
+    }
+}

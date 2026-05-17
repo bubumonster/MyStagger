@@ -4,6 +4,7 @@
 ## IconTexture: 236701
 ## Author: Bubumonster
 ## Version: 1.0.420
+## Category: MyThings
 ## SavedVariables: MyStaggerData
 
 MyStagger.lua
